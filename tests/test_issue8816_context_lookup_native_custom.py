@@ -94,6 +94,93 @@ def test_an_xai_alias_stays_builtin_without_plugin_discovery(monkeypatch, active
     assert (explicit.api_key, explicit.config_context_length) == ("synthetic-named", 12345)
 
 
+def _family_config(active, record, builtin="fireworks"):
+    return {
+        "model": {"provider": active, "default": "m-x"},
+        "providers": {
+            builtin: {"base_url": "https://builtin.invalid/v1", "api_key": "synthetic-builtin"},
+            "custom:" + record: {
+                "base_url": "https://named.invalid/v1",
+                "api_key": "synthetic-named",
+                "models": {"m-x": {"context_length": 12345}},
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize("discovery", ["as-is", "empty"])
+@pytest.mark.parametrize(
+    "active,record",
+    [
+        ("fireworks", "fireworks"),
+        ("Fireworks", "fireworks"),
+        ("fw", "fw"),
+        ("fw", "fireworks"),
+        ("fireworks-ai", "fireworks-ai"),
+        ("fireworks_ai", "fireworks_ai"),
+    ],
+)
+def test_an_agent_catalog_builtin_stays_builtin_in_both_discovery_states(monkeypatch, discovery, active, record):
+    """Fireworks is outside WebUI's static tables; the Agent's provider catalog and
+    alias table still make every bare spelling a built-in, as on v0.52.544."""
+    from api import plugin_providers
+
+    if discovery == "empty":
+        monkeypatch.setattr(plugin_providers, "_PROFILES_BY_NAME", {})
+    data = _family_config(active, record)
+    _use(monkeypatch, data)
+
+    assert config._is_bare_builtin_provider_id(active)
+    bare = routes._context_length_lookup_inputs_for_model("m-x", active, cfg=data)
+    assert bare.api_key != "synthetic-named"
+    assert bare.config_context_length != 12345
+    assert config._named_custom_provider_slug_for_provider(active, data) == ""
+    _model, provider, base_url = config.resolve_model_provider("m-x")
+    assert not str(provider).startswith("custom:"), (provider, base_url)
+    assert base_url != "https://named.invalid/v1"
+
+    explicit = routes._context_length_lookup_inputs_for_model("m-x", "custom:" + record, cfg=data)
+    assert (explicit.api_key, explicit.config_context_length) == ("synthetic-named", 12345)
+
+
+@pytest.mark.parametrize("discovery", ["as-is", "empty"])
+def test_a_genuine_bare_custom_id_still_takes_its_native_record(monkeypatch, discovery):
+    """Control: a name that is no built-in keeps #8689's behaviour on .630."""
+    from api import plugin_providers
+
+    if discovery == "empty":
+        monkeypatch.setattr(plugin_providers, "_PROFILES_BY_NAME", {})
+    data = {
+        "model": {"provider": "my-proxy", "default": "m-x"},
+        "providers": {
+            "custom:my-proxy": {
+                "base_url": "https://named.invalid/v1",
+                "api_key": "synthetic-named",
+                "models": {"m-x": {"context_length": 12345}},
+            },
+        },
+    }
+    _use(monkeypatch, data)
+
+    assert not config._is_bare_builtin_provider_id("my-proxy")
+    found = routes._context_length_lookup_inputs_for_model("m-x", "my-proxy", cfg=data)
+    assert (found.api_key, found.config_context_length) == ("synthetic-named", 12345)
+    assert config._named_custom_provider_slug_for_provider("my-proxy", data) == "custom:my-proxy"
+
+
+def test_an_agent_without_the_provider_catalog_is_tolerated(monkeypatch):
+    """An Agent whose ``hermes_cli.models`` lacks ``CANONICAL_PROVIDERS`` gives no catalog
+    ids rather than an error; WebUI's own tables still classify the built-ins they know."""
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "hermes_cli.models", types.ModuleType("hermes_cli.models"))
+    assert config._agent_builtin_provider_ids() == ()
+    assert config._is_bare_builtin_provider_id("openai")
+    assert not config._is_bare_builtin_provider_id("my-proxy")
+    assert not config._is_bare_builtin_provider_id("custom:openai")
+
+
 def test_a_legacy_entry_named_after_a_builtin_still_claims_it(monkeypatch):
     """Unchanged from v0.52.544: a legacy ``custom_providers`` entry of that name keeps the bare id."""
     data = {

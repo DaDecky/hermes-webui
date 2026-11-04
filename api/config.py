@@ -1998,14 +1998,40 @@ def _is_bare_builtin_provider_id(provider: object) -> bool:
         return False
     if not _is_native_custom_provider_key(raw):
         return True
-    target = str(_resolve_provider_alias(raw) or raw).strip().lower()
-    for known in (*_PROVIDER_DISPLAY, *_PROVIDER_MODELS):
-        if not isinstance(known, str):
-            continue
-        known_raw = known.strip().lower()
-        if target == known_raw or str(_resolve_provider_alias(known_raw) or known_raw).strip().lower() == target:
-            return True
-    return False
+
+    def _forms(value: str) -> set[str]:
+        value = value.strip().lower()
+        forms = {value, value.replace("_", "-")}
+        forms |= {str(_resolve_provider_alias(f) or f).strip().lower() for f in tuple(forms)}
+        return {f for f in forms if f}
+
+    targets = _forms(raw)
+    # A registered plugin reached through an alias (``fw`` -> ``fireworks``).
+    if any(_is_plugin_model_provider(t) for t in targets):
+        return True
+    # A built-in from WebUI's tables or the Agent's own provider catalog, so the
+    # answer doesn't depend on WebUI's plugin discovery (``fireworks`` is in the
+    # Agent catalog but not in WebUI's tables).
+    known = [k for k in (*_PROVIDER_DISPLAY, *_PROVIDER_MODELS) if isinstance(k, str)]
+    known.extend(_agent_builtin_provider_ids())
+    return any(targets & _forms(k) for k in known)
+
+
+def _agent_builtin_provider_ids() -> tuple[str, ...]:
+    """Provider slugs in the Agent's canonical catalog, or ``()`` when the Agent
+    (or an older Agent without the catalog) isn't importable."""
+    try:
+        from hermes_cli.models import CANONICAL_PROVIDERS
+    except Exception:
+        return ()
+    slugs = []
+    for entry in CANONICAL_PROVIDERS or ():
+        slug = getattr(entry, "slug", None)
+        if slug is None and isinstance(entry, (tuple, list)) and entry:
+            slug = entry[0]
+        if isinstance(slug, str) and slug.strip():
+            slugs.append(slug.strip().lower())
+    return tuple(slugs)
 
 
 def _resolve_configured_provider_id(
