@@ -181,6 +181,58 @@ def test_an_agent_without_the_provider_catalog_is_tolerated(monkeypatch):
     assert not config._is_bare_builtin_provider_id("custom:openai")
 
 
+class _RaisingSlug:
+    @property
+    def slug(self):
+        raise RuntimeError("catalog entry from a future Agent")
+
+
+@pytest.mark.parametrize(
+    "catalog,expected",
+    [
+        (5, ()),
+        ([_RaisingSlug()], ()),
+        (["Fireworks", "", None, ("xai", "xAI", "")], ("fireworks", "xai")),
+        ([{"slug": "fireworks"}], ()),
+    ],
+)
+def test_an_unexpected_catalog_shape_never_raises_into_routing(monkeypatch, catalog, expected):
+    import sys
+    import types
+
+    module = types.ModuleType("hermes_cli.models")
+    module.CANONICAL_PROVIDERS = catalog
+    monkeypatch.setitem(sys.modules, "hermes_cli.models", module)
+    assert config._agent_builtin_provider_ids() == expected
+    assert config._is_bare_builtin_provider_id("openai")
+    assert not config._is_bare_builtin_provider_id("my-proxy")
+
+
+@pytest.mark.parametrize("discovery", ["as-is", "empty"])
+@pytest.mark.parametrize("active", ["vllm", "local"])
+@pytest.mark.parametrize("shape", ["bare-native-key", "custom-key"])
+def test_a_generic_custom_alias_keeps_its_own_record(monkeypatch, discovery, active, shape):
+    """``vllm``/``local`` alias the generic ``custom`` placeholder in the Agent's table, not
+    a built-in: with its own record, the bare id keeps .630's route to that record.
+    (``ollama`` is ``custom`` in WebUI's own alias table too, so .630 never routed it to a
+    native record; the fold leaves that unchanged.)"""
+    from api import plugin_providers
+
+    if discovery == "empty":
+        monkeypatch.setattr(plugin_providers, "_PROFILES_BY_NAME", {})
+    key = active if shape == "bare-native-key" else "custom:" + active
+    data = {
+        "model": {"provider": active, "default": "m-x"},
+        "providers": {key: {"base_url": "https://named.invalid/v1", "api_key": "synthetic-named", "models": {"m-x": {}}}},
+    }
+    _use(monkeypatch, data)
+
+    assert not config._is_bare_builtin_provider_id(active)
+    assert config._named_custom_provider_slug_for_provider(active, data) == "custom:" + active
+    _model, provider, base_url = config.resolve_model_provider("m-x")
+    assert (provider, base_url) == ("custom:" + active, "https://named.invalid/v1")
+
+
 def test_a_legacy_entry_named_after_a_builtin_still_claims_it(monkeypatch):
     """Unchanged from v0.52.544: a legacy ``custom_providers`` entry of that name keeps the bare id."""
     data = {

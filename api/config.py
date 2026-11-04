@@ -2003,7 +2003,11 @@ def _is_bare_builtin_provider_id(provider: object) -> bool:
         value = value.strip().lower()
         forms = {value, value.replace("_", "-")}
         forms |= {str(_resolve_provider_alias(f) or f).strip().lower() for f in tuple(forms)}
-        return {f for f in forms if f}
+        # The generic ``custom`` target (Agent aliases ollama/local/vllm -> custom;
+        # catalog slug ``custom``) is a placeholder, not a provider identity: a
+        # bare ``vllm`` with its own ``custom:vllm`` record keeps that route, as on
+        # .630. A raw ``custom`` id already returned above.
+        return {f for f in forms if f and f != "custom"}
 
     targets = _forms(raw)
     # A registered plugin reached through an alias (``fw`` -> ``fireworks``).
@@ -2019,19 +2023,24 @@ def _is_bare_builtin_provider_id(provider: object) -> bool:
 
 def _agent_builtin_provider_ids() -> tuple[str, ...]:
     """Provider slugs in the Agent's canonical catalog, or ``()`` when the Agent
-    (or an older Agent without the catalog) isn't importable."""
+    (or an older Agent without the catalog) isn't importable, or the catalog has
+    a shape this WebUI doesn't know. Never raises into routing."""
     try:
         from hermes_cli.models import CANONICAL_PROVIDERS
+
+        slugs = []
+        for entry in CANONICAL_PROVIDERS or ():
+            if isinstance(entry, str):
+                slug = entry
+            else:
+                slug = getattr(entry, "slug", None)
+                if slug is None and isinstance(entry, (tuple, list)) and entry:
+                    slug = entry[0]
+            if isinstance(slug, str) and slug.strip():
+                slugs.append(slug.strip().lower())
+        return tuple(slugs)
     except Exception:
         return ()
-    slugs = []
-    for entry in CANONICAL_PROVIDERS or ():
-        slug = getattr(entry, "slug", None)
-        if slug is None and isinstance(entry, (tuple, list)) and entry:
-            slug = entry[0]
-        if isinstance(slug, str) and slug.strip():
-            slugs.append(slug.strip().lower())
-    return tuple(slugs)
 
 
 def _resolve_configured_provider_id(
