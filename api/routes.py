@@ -9098,6 +9098,7 @@ def _context_length_lookup_inputs_for_model(
 
     from api.config import (
         _custom_provider_entries, _custom_provider_slug_key,
+        _is_native_custom_provider_key, _legacy_custom_provider_names,
         _select_custom_provider_record, _unique_custom_provider_entry,
     )
 
@@ -9131,8 +9132,25 @@ def _context_length_lookup_inputs_for_model(
             selected, selected_source, _exact, _status = _select_custom_provider_record(
                 effective_provider, _custom_provider_slug_key(effective_provider), cfg,
             )
+        # #8816: a bare built-in or plugin id (``openai``) is claimed only by a
+        # legacy ``custom_providers`` entry of that name, as on v0.52.544 — the
+        # rule #8685 put in api.config._named_custom_provider_slug_for_provider.
+        # A native ``providers['custom:openai']`` record needs the explicit
+        # ``custom:openai`` provider. Matched here by slug, it handed the bare
+        # built-in session the custom record's key (sent to the BUILT-IN
+        # endpoint by the metadata lookup) and its context limits.
+        lookup_entries = custom_providers
+        if not effective_provider.lower().startswith("custom:") and not _is_native_custom_provider_key(
+            effective_provider
+        ):
+            legacy_names = _legacy_custom_provider_names(cfg)
+            lookup_entries = [
+                candidate for candidate in custom_providers
+                if isinstance(candidate, dict)
+                and str(candidate.get("name") or "").strip().lower() in legacy_names
+            ]
         entry = _unique_custom_provider_entry(
-            custom_providers, _custom_provider_slug_key(effective_provider),
+            lookup_entries, _custom_provider_slug_key(effective_provider),
         )
         if entry is None and selected is not None and selected_source in {"providers", "custom_providers"}:
             entry = dict(selected)
