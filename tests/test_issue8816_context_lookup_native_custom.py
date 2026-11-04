@@ -58,6 +58,42 @@ def test_a_bare_builtin_id_does_not_take_the_native_custom_record(monkeypatch, p
     assert explicit.config_context_length == 12345
 
 
+def _xai_config(active):
+    return {
+        "model": {"provider": active, "default": "grok-x"},
+        "providers": {
+            "x-ai": {"base_url": "https://builtin.invalid/v1", "api_key": "synthetic-builtin"},
+            "custom:xai": {
+                "base_url": "https://named.invalid/v1",
+                "api_key": "synthetic-named",
+                "models": {"grok-x": {"context_length": 12345}},
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize("active", ["x-ai", "xai", "grok"])
+def test_an_xai_alias_stays_builtin_without_plugin_discovery(monkeypatch, active):
+    """With the plugin registry empty, the Agent's canonical ``xai`` is not in WebUI's
+    static tables (they say ``x-ai``); it must still count as a built-in, for the
+    context lookup and for routing, as on v0.52.544."""
+    from api import plugin_providers
+
+    monkeypatch.setattr(plugin_providers, "_PROFILES_BY_NAME", {})
+    data = _xai_config(active)
+    _use(monkeypatch, data)
+
+    bare = routes._context_length_lookup_inputs_for_model("grok-x", active, cfg=data)
+    assert (bare.api_key, bare.config_context_length) == ("synthetic-builtin", None)
+    assert config._named_custom_provider_slug_for_provider(active, data) == ""
+    _model, provider, base_url = config.resolve_model_provider("grok-x")
+    assert not str(provider).startswith("custom:"), (provider, base_url)
+    assert base_url != "https://named.invalid/v1"
+
+    explicit = routes._context_length_lookup_inputs_for_model("grok-x", "custom:xai", cfg=data)
+    assert (explicit.api_key, explicit.config_context_length) == ("synthetic-named", 12345)
+
+
 def test_a_legacy_entry_named_after_a_builtin_still_claims_it(monkeypatch):
     """Unchanged from v0.52.544: a legacy ``custom_providers`` entry of that name keeps the bare id."""
     data = {

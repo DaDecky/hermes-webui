@@ -9098,7 +9098,7 @@ def _context_length_lookup_inputs_for_model(
 
     from api.config import (
         _custom_provider_entries, _custom_provider_slug_key,
-        _is_native_custom_provider_key, _legacy_custom_provider_names,
+        _is_bare_builtin_provider_id, _legacy_custom_provider_names,
         _select_custom_provider_record, _unique_custom_provider_entry,
     )
 
@@ -9140,9 +9140,7 @@ def _context_length_lookup_inputs_for_model(
         # built-in session the custom record's key (sent to the BUILT-IN
         # endpoint by the metadata lookup) and its context limits.
         lookup_entries = custom_providers
-        if not effective_provider.lower().startswith("custom:") and not _is_native_custom_provider_key(
-            effective_provider
-        ):
+        if _is_bare_builtin_provider_id(effective_provider):
             legacy_names = _legacy_custom_provider_names(cfg)
             lookup_entries = [
                 candidate for candidate in custom_providers

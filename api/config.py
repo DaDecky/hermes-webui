@@ -1953,7 +1953,7 @@ def _named_custom_provider_slug_for_provider(
     # selector; WebUI selector resolution never hands it the bare built-in
     # route (#8685). The Agent's own runtime resolution is order-dependent
     # downstream of this (#8690).
-    legacy_only = not raw.startswith("custom:") and not _is_native_custom_provider_key(raw)
+    legacy_only = _is_bare_builtin_provider_id(raw)
     legacy_names = _legacy_custom_provider_names(config_obj) if legacy_only else set()
     for entry in _custom_provider_entries(config_obj):
         entry_name = str(entry.get("name") or "").strip().lower()
@@ -1978,6 +1978,34 @@ def _legacy_custom_provider_names(config_obj: dict | None = None) -> set[str]:
         for entry in raw_entries
         if isinstance(entry, dict) and str(entry.get("name") or "").strip()
     }
+
+
+def _is_bare_builtin_provider_id(provider: object) -> bool:
+    """Whether a bare (non-``custom:``) id names a built-in or plugin provider.
+
+    Such an id is claimed only by a legacy ``custom_providers`` entry of that
+    name, never by a native ``providers['custom:<id>']`` record (#8685, #8816).
+
+    ``_is_native_custom_provider_key`` alone decides plugin-backed built-ins from
+    the plugin registry, so with plugin discovery unavailable the Agent's
+    canonical ``xai`` (WebUI's tables say ``x-ai``) read as a native custom key,
+    and a bare xAI session took the ``custom:xai`` record's endpoint and key
+    (#8816). A static-table built-in is therefore also matched through the
+    provider alias table, independent of plugin discovery.
+    """
+    raw = str(provider or "").strip().lower()
+    if not raw or raw.startswith("custom:"):
+        return False
+    if not _is_native_custom_provider_key(raw):
+        return True
+    target = str(_resolve_provider_alias(raw) or raw).strip().lower()
+    for known in (*_PROVIDER_DISPLAY, *_PROVIDER_MODELS):
+        if not isinstance(known, str):
+            continue
+        known_raw = known.strip().lower()
+        if target == known_raw or str(_resolve_provider_alias(known_raw) or known_raw).strip().lower() == target:
+            return True
+    return False
 
 
 def _resolve_configured_provider_id(
